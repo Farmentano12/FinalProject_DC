@@ -565,7 +565,7 @@ e10
 set.seed(1)
 set.seed(1, sample.kind="Rounding")
 train_multinom <- train(Churn ~ ., method = "multinom",
-                        data = training_set)
+                        data = training_set, trace = FALSE)
 which.max(train_multinom$results$Accuracy)
 train_multinom$results$Accuracy[which.max(train_multinom$results$Accuracy)]
 e11 <- as.numeric(train_multinom$results$Accuracy[which.max(train_multinom$results$Accuracy)])
@@ -1208,7 +1208,7 @@ e10
 set.seed(1)
 set.seed(1, sample.kind="Rounding")
 train_multinom <- train(Churn ~ ., method = "multinom",
-                        data = training_set)
+                        data = training_set, trace = FALSE)
 which.max(train_multinom$results$Accuracy)
 train_multinom$results$Accuracy[which.max(train_multinom$results$Accuracy)]
 e11 <- as.numeric(train_multinom$results$Accuracy[which.max(train_multinom$results$Accuracy)])
