@@ -1,0 +1,1115 @@
+---
+title: "Final Project Data Scientist HarvardX Program / Drivers Churn in a ride-hailing APP"
+author: "Facundo Armentano"
+date: "2/22/2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(caret)
+library(data.table)
+library(ggrepel)
+library(ggthemes)
+library(GGally)
+library(purrr)
+library(dplyr, warn.conflicts = FALSE)
+# Suppress summarise info
+options(dplyr.summarise.inform = FALSE)
+
+#Multiplot Function
+multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+  library(grid)
+  
+  # Make a list from the ... arguments and plotlist
+  plots <- c(list(...), plotlist)
+  
+  numPlots = length(plots)
+  
+  # If layout is NULL, then use 'cols' to determine layout
+  if (is.null(layout)) {
+    # Make the panel
+    # ncol: Number of columns of plots
+    # nrow: Number of rows needed, calculated from # of cols
+    layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                     ncol = cols, nrow = ceiling(numPlots/cols))
+  }
+  
+  if (numPlots==1) {
+    print(plots[[1]])
+    
+  } else {
+    # Set up the page
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+    
+    # Make each plot, in the correct location
+    for (i in 1:numPlots) {
+      # Get the i,j matrix positions of the regions that contain this subplot
+      matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+      
+      print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                      layout.pos.col = matchidx$col))
+    }
+  }
+}
+
+```
+
+## Case of Study: Drivers churn in a ride-hailing APP
+
+# 1. Context
+The present project has the goal of studying drivers churn in a ride-hailing APP in order to know if through Machine Learning (ML from now on) there is an opportunity to reduce churn and make bonus budget more efficient.
+
+The dataset used for the analysis, is a database of drivers working for a ride-hailing APP during a complete month in a city of latin america.
+
+Drivers have been anonymized and there is no information of the month or year, or the country or region from where the data comes from.
+
+The problem is about predicting whether a driver will drive drive on the current month (m) or he will churn using as predictors some business metrics of the previous month (m-1) that will be explained in further detail later.
+
+The objective is to predict churn (YES or NO), and get a better understanding of drivers motivations, in order to set a bonus or other incentive to prevent churn. 
+
+# 2. Dataset
+
+```{r load_dataset, include=FALSE}
+#Load the dataset:
+id <- "1fk-_ZEso96zG3F-Ox27Xn01URRDtTe_u" # google file ID
+dc <- read.csv(sprintf("https://docs.google.com/uc?id=%s&export=download", id))
+dc <- dc %>% select(-ID)
+head(dc)
+names(dc)
+
+```
+
+```{r summary_data,include=TRUE}
+summary(dc)
+```
+
+```{r description, include=TRUE, echo=FALSE}
+print(paste("We see the dataset contains", paste(dim(dc)[1],"rows")))
+print(paste("And", paste(dim(dc)[2],"columns with 11 predictors for Churn")))
+```
+
+# 3. Variables description
+In the present section, all the features (predictors) will be explained and shown in an intuitive way for a better understanding of the data.
+
+3.1. Driver Tenure makes reference to the time the driver has been working with the APP:
+
+```{r variables description_1, include=TRUE, echo=FALSE, warning=FALSE}
+  #1. DriverTenure (character): It is related to how much time the driver has been driving with the APP.
+
+dc %>% group_by(DriverTenure) %>% summarise(Drivers = n()) %>% mutate(Prop = 
+Drivers/sum(Drivers))
+
+dc %>% group_by(DriverTenure) %>% summarise(drivers = n()) %>%
+  ggplot(aes(DriverTenure,drivers, label = drivers, vjust=-.5)) +
+  geom_bar(stat="identity",position="dodge") +
+  ggtitle("Quantity of drivers according to their tenure") + theme_economist() +
+  xlab("Driver Tenure")  +
+  ylab("Drivers")  +
+  geom_text_repel() +
+  theme(legend.position='top',
+        legend.margin = element_text(margin = margin(b = 6, unit = "cm")),
+        axis.text.x = 
+          element_text(size = 8, margin = margin(t = -1, unit = "cm"), angle = 45),
+        axis.title.x =  
+          element_text(size = 12, margin = margin(t = 1, unit = "cm")),
+        axis.title.y =  
+          element_text(size = 12, margin = margin(r = .25, unit = "cm")))
+
+```
+We see similar proportions in the four categories, but decreasing over time.
+
+3.2. Fleet role is a binary variable in which is separated whether the driver is the owner of the car or not:
+
+```{r variables description_2, include=TRUE, echo=FALSE, warning=FALSE}
+#2. FleetRole (character): Wheter the drivers is the owner of the car (DWC) or is a driving somebody else's car (DWOC)
+dc %>% group_by(FleetRole) %>% summarize(drivers = n()) %>%
+  ggplot(aes(FleetRole,drivers, label = drivers, vjust=-1)) +
+  geom_bar(stat="identity",position="dodge") +
+  ggtitle("Quantity of drivers according to their fleet role") + theme_economist() +
+  xlab("Drivers with and without car")  +
+  ylab("Drivers")  +
+  geom_text_repel() +
+  theme(legend.position='top',
+        title  = 
+          element_text(margin = margin(b = .25, unit = "cm")),
+        legend.margin = element_text(margin = margin(t = 1, unit = "cm")),
+        axis.text.x = 
+          element_text(size = 10, margin = margin(t = .25, unit = "cm")),
+        axis.title.x =  
+          element_text(size = 12, margin = margin(t = .1, unit = "cm")),
+        axis.title.y =  
+          element_text(size = 12, margin = margin(r = .25, unit = "cm")))
+
+dc %>% group_by(FleetRole) %>% summarize(Drivers = n()) %>% mutate(Prop = Drivers/sum(Drivers))
+
+
+```
+Almost 9 out of 10 drivers own their car.
+
+3.3. Driver type has three possible outcomes:
+New: The ones driving in their first month.
+Recurrent: Drivers with journeys in m - 1.
+Reactivated: Drivers without journeys in m -1 but with previous journeys.
+
+```{r variables description_3, include=TRUE, echo=FALSE, warning=FALSE}
+dc %>% group_by(DriverType) %>% summarize(drivers = n()) %>%
+  ggplot(aes(DriverType,drivers, label = drivers, vjust=-.5)) +
+  geom_bar(stat="identity",position="dodge") +
+  ggtitle("Quantity of drivers according to their type") + theme_economist() +
+  xlab("Driver Type")  +
+  ylab("Drivers")  +
+  geom_text_repel() +
+  theme(legend.position='top',
+        legend.margin = element_text(margin = margin(t = -1, unit = "cm")),
+        axis.text.x = 
+          element_text(size = 10, margin = margin(t = .25, unit = "cm")),
+        axis.title.x =  
+          element_text(size = 12, margin = margin(t = .5, unit = "cm")),
+        axis.title.y =  
+          element_text(size = 12, margin = margin(r = .25, unit = "cm")))
+
+dc %>% group_by(DriverType) %>% summarize(Drivers = n()) %>% mutate(Prop = Drivers/sum(Drivers))
+```
+75% of drivers are recurrent.
+
+3.4. DO: is the quantity of journeys completed by the driver in m-1.
+
+```{r variables description_4, echo=FALSE, warning=FALSE, include=TRUE}
+dc %>%  ggplot(aes(x = DO)) +
+  geom_histogram(bins = 10, color = "black") +
+  stat_bin(bins = 10, geom="text", aes(label=..count..), vjust=-.5) +
+  ggtitle("Histogram of drivers according to their journeys") + theme_economist() +
+  xlab("Journeys (10 classes)")  +
+  ylab("Quantity of drivers in class")  +
+  theme(legend.position='bottom',
+        title  = 
+          element_text(margin = margin(b = .5, unit = "cm")),
+        axis.text.x = 
+          element_text(size = 10, margin = margin(t = .25, unit = "cm")),
+        axis.title.x =  
+          element_text(size = 12, margin = margin(t = .25, unit = "cm")),
+        axis.title.y =  
+          element_text(size = 12, margin = margin(r = .25, unit = "cm")))
+```
+
+3.5. Working Hours are the amount of hours of connection the driver had in the month in m-1.
+
+```{r variables description_5, include=TRUE, echo=FALSE, warning=FALSE}
+dc %>%  ggplot(aes(x = WorkingHours)) +
+  geom_histogram(bins = 10, color = "black") +
+  stat_bin(bins = 10, geom="text", aes(label=..count..), vjust=-.5) +
+  ggtitle("Histogram of drivers according to their working hours") + theme_economist() +
+  xlab("Working Hours (10 classes)")  +
+  ylab("Quantity of drivers in class")  +
+  theme(legend.position='bottom',
+        title  = 
+          element_text(size = 10,margin = margin(b = .5, unit = "cm")),
+        axis.text.x = 
+          element_text(size = 10, margin = margin(t = .25, unit = "cm")),
+        axis.title.x =  
+          element_text(size = 12, margin = margin(t = .25, unit = "cm")),
+        axis.title.y =  
+          element_text(size = 12, margin = margin(r = .25, unit = "cm")))
+```
+
+3.6. AVG Ticket refers to the mean of the income the driver got by journey in m-1.
+
+```{r variables description_6, include=TRUE, echo=FALSE, warning=FALSE}
+p1 <- dc %>%  ggplot(aes(y = AVGTicket)) +
+  geom_boxplot() +
+  #geom_histogram(bins = 15, color = "black") +
+  #stat_bin(bins = 15, geom="text", aes(label=..count..), vjust=-.5) +
+  ggtitle("Boxplot of average earning per journey") + theme_economist() +
+  ylab("Average earning per journey")  +
+  theme(legend.position='bottom',
+        title  = 
+          element_text(size = 6,margin = margin(b = .5, unit = "cm")),
+        axis.title.x =  
+          element_text(size = 12, margin = margin(t = .25, unit = "cm")),
+        axis.title.y =  
+          element_text(size = 12, margin = margin(r = .25, unit = "cm")))
+
+p2 <- dc %>%  ggplot(aes(x = AVGTicket)) +
+  geom_histogram(bins = 10, color = "black") +
+  stat_bin(bins = 10, geom="text", aes(label=..count..), vjust=-.5) +
+  ggtitle("Histogram of average earning per journey") + theme_economist() +
+  ylab("Drivers in classes")  +
+  theme(legend.position='bottom',
+        title  = 
+          element_text(size = 6,margin = margin(l = -1, r = 1, b = .5, unit = "cm")),
+        axis.title.x =  
+          element_text(size = 8, margin = margin(t = .2, unit = "cm")),
+        axis.title.y =  
+          element_text(size = 12, margin = margin(r = .25, unit = "cm")))
+
+multiplot(p1, p2, cols=2)
+```
+
+3.7. Cost refers to the total or earnings the driver had in m-1.
+
+```{r variables description_7, include=TRUE, echo=FALSE, warning=FALSE}
+p1 <- dc %>%  ggplot(aes(y = Cost)) +
+  geom_boxplot() +
+  ggtitle("Boxplot of income per driver") + theme_economist() +
+  ylab("Income per driver")  +
+  theme(legend.position='bottom',
+        title  = 
+          element_text(size = 6,margin = margin(b = .5, unit = "cm")),
+        axis.title.x =  
+          element_text(size = 12, margin = margin(t = .25, unit = "cm")),
+        axis.title.y =  
+          element_text(size = 10, margin = margin(r = .25, unit = "cm")))
+
+p2 <- dc %>%  ggplot(aes(x = Cost)) +
+  geom_histogram(bins = 10, color = "black") +
+  stat_bin(bins = 10, geom="text", aes(label=..count..), vjust=-.5) +
+  ggtitle("Histogram of income per driver") + theme_economist() +
+  ylab("Drivers in classes")  +
+  xlab("Drivers income")  +
+  theme(legend.position='bottom',
+        title  = 
+          element_text(size = 6,margin = margin(l = -1, r = 1, b = .5, unit = "cm")),
+        axis.title.x =  
+          element_text(size = 8, margin = margin(t = .2, unit = "cm")),
+        axis.title.y =  
+          element_text(size = 10, margin = margin(r = .25, unit = "cm")))
+
+multiplot(p1, p2, cols=2)
+```
+
+3.8. Load factor is a number between 0 and 1 that represents the proportion that the driver was in journey in m-1.
+
+```{r variables description_8, include=TRUE, echo=FALSE, warning=FALSE}
+dc %>%  ggplot(aes(x = LoadFactor)) +
+  geom_histogram(bins = 10, color = "black") +
+  stat_bin(bins = 10, geom="text", aes(label=..count..), vjust=-.5) +
+  ggtitle("Histogram of load factor of drivers") + theme_economist() +
+  xlab("Classes")  +
+  ylab("Quantity of drivers in class")  +
+  theme(legend.position='bottom',
+        title  = 
+          element_text(size = 10,margin = margin(b = .5, unit = "cm")),
+        axis.text.x = 
+          element_text(size = 10, margin = margin(t = .25, unit = "cm")),
+        axis.title.x =  
+          element_text(size = 12, margin = margin(t = .25, unit = "cm")),
+        axis.title.y =  
+          element_text(size = 12, margin = margin(r = .25, unit = "cm")))
+```
+
+3.9. Frequent Moment is a binary variable that is HDM (High Demand Moment) if the driver was 50% or more of his connected time in High Demand moments and LDM (Low Demand Moments) in any other way.
+
+```{r variables description_9, include=TRUE, echo=FALSE, warning=FALSE}
+dc %>% group_by(FrequentMoment) %>% summarize(drivers = n()) %>%
+  ggplot(aes(FrequentMoment,drivers, label = drivers, vjust=-.5)) +
+  geom_bar(stat="identity",position="dodge") +
+  ggtitle("Quantity of drivers according to moment of connection") + theme_economist() +
+  xlab("Frequent Connection Moment")  +
+  ylab("Drivers")  +
+  geom_text_repel() +
+  theme(legend.position='top',
+        title  = 
+          element_text(size = 10,margin = margin(b = .5, unit = "cm")),
+        legend.margin = element_text(margin = margin(t = -1, unit = "cm")),
+        axis.text.x = 
+          element_text(size = 10, margin = margin(t = .25, unit = "cm")),
+        axis.title.x =  
+          element_text(size = 12, margin = margin(t = .5, unit = "cm")),
+        axis.title.y =  
+          element_text(size = 12, margin = margin(r = .25, unit = "cm")))
+
+dc %>% group_by(FrequentMoment) %>% summarize(Drivers = n()) %>% mutate(Prop = Drivers/sum(Drivers))
+```
+
+3.10. CorpProd is a binary variable that is YES if driver is eligible for corporate journeys.
+
+```{r variables description_10, include=TRUE, echo=FALSE, warning=FALSE}
+dc %>% group_by(CorpProd) %>% summarize(drivers = n()) %>%
+  ggplot(aes(CorpProd,drivers, label = drivers, vjust=-.5)) +
+  geom_bar(stat="identity",position="dodge") +
+  ggtitle("Quantity of drivers with corporate journeys") + theme_economist() +
+  xlab("Corporate Journeys")  +
+  ylab("Drivers")  +
+  geom_text_repel() +
+  theme(legend.position='top',
+        title  = 
+          element_text(size = 10,margin = margin(b = .5, unit = "cm")),
+        legend.margin = element_text(margin = margin(t = -1, unit = "cm")),
+        axis.text.x = 
+          element_text(size = 10, margin = margin(t = .25, unit = "cm")),
+        axis.title.x =  
+          element_text(size = 12, margin = margin(t = .5, unit = "cm")),
+        axis.title.y =  
+          element_text(size = 12, margin = margin(r = .25, unit = "cm")))
+
+dc %>% group_by(CorpProd) %>% summarize(Drivers = n()) %>% mutate(Prop = Drivers/sum(Drivers))
+```
+
+3.11. Frequent Zone is binary variable that is HDZ (High Demand Zone) if the 50% or more of the driver's connected time, the driver does it in a High Demand zone and LDZ (Low Demand Zone) in any other way.
+
+```{r variables description_11, include=TRUE, echo=FALSE, warning=FALSE}
+dc %>% group_by(FrequentZone) %>% summarize(drivers = n()) %>%
+  ggplot(aes(FrequentZone,drivers, label = drivers, vjust=-.5)) +
+  geom_bar(stat="identity",position="dodge") +
+  ggtitle("Quantity of drivers according to zone of connection") + theme_economist() +
+  xlab("Frequent Connection Zone")  +
+  ylab("Drivers")  +
+  geom_text_repel() +
+  theme(legend.position='top',
+        title  = 
+          element_text(size = 10,margin = margin(b = .5, unit = "cm")),
+        legend.margin = element_text(margin = margin(t = -1, unit = "cm")),
+        axis.text.x = 
+          element_text(size = 10, margin = margin(t = .25, unit = "cm")),
+        axis.title.x =  
+          element_text(size = 12, margin = margin(t = .5, unit = "cm")),
+        axis.title.y =  
+          element_text(size = 12, margin = margin(r = .25, unit = "cm")))
+
+dc %>% group_by(FrequentZone) %>% summarize(Drivers = n()) %>% mutate(Prop = Drivers/sum(Drivers))
+```
+
+# 4. Dataset Prevalence
+Studying the dataset, we see that more than 70% of drivers are not churners:
+
+```{r prevalence, include=TRUE, echo=FALSE, warning=FALSE}
+dc %>% group_by(Churn) %>% summarize(Drivers = n()) %>%
+  ggplot(aes(Churn,Drivers, label = Drivers, vjust=-.5)) +
+  geom_bar(stat="identity",position="dodge") +
+  ggtitle("Quantity of drivers churning") + theme_economist() +
+  xlab("Churn")  +
+  ylab("Drivers")  +
+  geom_text_repel() +
+  theme(legend.position='top',
+        title  = 
+          element_text(size = 10,margin = margin(b = .5, unit = "cm")),
+        legend.margin = element_text(margin = margin(t = -1, unit = "cm")),
+        axis.text.x = 
+          element_text(size = 10, margin = margin(t = .25, unit = "cm")),
+        axis.title.x =  
+          element_text(size = 12, margin = margin(t = .5, unit = "cm")),
+        axis.title.y =  
+          element_text(size = 12, margin = margin(r = .25, unit = "cm")))
+
+dc %>% group_by(Churn) %>% summarize(Drivers = n()) %>% mutate(Prop = Drivers/sum(Drivers))
+
+```
+
+This is intuitive, but having an unbalanced dataset may bring problems to predictions.
+
+For this reason, at the end of the project, all algorithms will run for a balanced dataset to see if there are differences in Accuracy, Sensitivity and Specificity.
+
+# 5. Numeric variables and Churn
+In a first approach, it is interesting to see if there is a correlation between numerical variables, and if there is a relationship with Churn:
+
+```{r correlation, include=TRUE, echo=FALSE, warning=FALSE}
+dc %>%  ggpairs(columns = c("DO", "WorkingHours", "AVGTicket", "Cost"), 
+          aes(color = Churn),
+          upper = list(continuous = wrap('cor', size = 5)),
+          diag = list(continuous = wrap("densityDiag", alpha = 0.5)))
+
+```
+
+Churners are in general more likely to have less DO, Working Hours, AVG Ticket and Income in m-1.
+
+# 6. Create data partition
+The next step in the analysis is to create a partition of the data to train different models.
+In this case only 10% will be separated for testing our models.
+
+```{r data_partition, include=FALSE, echo=FALSE, warning=FALSE}
+dc_2 <- dc %>% mutate(#DriverTenure = as.factor(DriverTenure),
+                      #FleetRole = as.factor(FleetRole),
+                      #DriverType = as.factor(DriverType),
+                      #FrequentMoment = as.factor(FrequentMoment),
+                      #CorpProd = as.factor(CorpProd),
+                      #FrequentZone = as.factor(FrequentZone),
+                      Churn = as.factor(Churn))
+summary(dc_2) 
+
+set.seed(1, sample.kind="Rounding") # if using R 3.5 or earlier, use `set.seed(1)`
+set.seed(1)
+test_index <- createDataPartition(dc_2$Churn, times = 1, p = 0.1, list = FALSE)
+training_set <- dc_2[-test_index,]
+test_set <- dc_2[test_index,]
+
+```
+
+As a result, *we split data in two*:
+```{r data_partition_2, include=TRUE, echo=FALSE, warning=FALSE}
+
+print(paste("Training Set",paste(dim(training_set)[1],"rows")))
+print(paste("Training Set",paste(dim(test_set)[1],"rows")))
+
+```
+
+# 7. Models
+The models to be trained in order to study Churn are:
+1. Linear Discriminant Analysis (lda)
+2. Quadratic Discriminant Analysis (qda)
+3. Logistic Regression (glm)
+4. k-Nearest Neighbor Classification with Bootstrap (knn_bootstrap)
+5. k-Nearest Neighbor Classification with Cross-validation (knn_crosvalidation)
+6. Classification Tree Model (ctm)
+7. Random Forests (rf)
+8. Naive Bayes (naive_bayes)
+9. Support Vector Machine (svmLinear)
+10. Generalized Additive Models - Locally Estimated Scatterplot Smoothing (gamLoess)
+11. Multinomial Logistic Regression (multinom)
+
+7.1. Linear Discriminant Analysis (lda)
+```{r lda, include=TRUE, echo=FALSE, warning=FALSE}
+
+set.seed(1)
+set.seed(1, sample.kind="Rounding")
+train_lda <- train(Churn ~ ., data = training_set, method = "lda")
+e1 <- as.numeric(train_lda$results['Accuracy'][1])
+print(paste("Accuracy LDA",round(e1,4)))
+
+```
+
+7.2. Quadratic Discriminant Analysis (qda)
+```{r qda, include=TRUE, echo=FALSE, warning=FALSE}
+
+set.seed(1)
+set.seed(1, sample.kind="Rounding")
+train_qda <- train(Churn ~ DO + WorkingHours + AVGTicket + Cost,
+                  data = training_set, method = "qda")
+e2 <- as.numeric(train_qda$results['Accuracy'][1])
+print(paste("Accuracy QDA",round(e2,4)))
+
+```
+
+7.3. Logistic Regression (glm)
+```{r glm, include=TRUE, echo=FALSE, warning=FALSE}
+
+set.seed(1)
+set.seed(1, sample.kind="Rounding")
+train_glm <- train(Churn ~ ., data = training_set, method = "glm")
+e3 <- as.numeric(train_glm$results['Accuracy'][1])
+print(paste("Accuracy GLM",round(e3,4)))
+
+```
+
+7.4. k-Nearest Neighbor Classification with Bootstrap (knn_bootstrap)
+```{r knn_bootstrap, include=TRUE, echo=FALSE, warning=FALSE}
+
+set.seed(1)
+set.seed(1, sample.kind="Rounding")
+train_knn <- train(Churn ~ ., data = training_set, 
+                   method = "knn", 
+                   tuneGrid = data.frame(k = seq(180, 310, 5))) #This is for k
+
+e4 <- as.numeric(max(train_knn$results['Accuracy']))
+
+print(paste("Optimal NN",train_knn$bestTune))
+
+print(paste("Accuracy KNN_Bootstrap",round(e4,4)))
+
+```
+```{r knn_b_graph, include=TRUE, echo=FALSE, warning=FALSE}
+ggplot(train_knn, highlight = TRUE) +
+  ggtitle("Default KNN Bootstrap") + theme_economist() +
+  annotate(geom = "text",
+           x = as.numeric(train_knn$bestTune[1]),
+           y = as.numeric(max(train_knn$results['Accuracy']))*1.0003,
+          label = paste("Max Accuracy",round(as.numeric(max(train_knn$results['Accuracy'])),4))) +
+  theme(legend.position='top',
+        title  = 
+          element_text(size = 10,margin = margin(b = .5, unit = "cm")),
+        legend.margin = element_text(margin = margin(t = -1, unit = "cm")),
+        axis.text.x = 
+          element_text(size = 10, margin = margin(t = .25, unit = "cm")),
+        axis.title.x =  
+          element_text(size = 12, margin = margin(t = .5, unit = "cm")),
+        axis.title.y =  
+          element_text(size = 12, margin = margin(r = .25, unit = "cm")))
+
+```
+
+7.5. k-Nearest Neighbor Classification with Cross-validation (knn_crosvalidation)
+```{r knn_cv, include=TRUE, echo=FALSE, warning=FALSE}
+
+control <- trainControl(method = "cv", number = 10, p = .9)
+set.seed(1)
+set.seed(1, sample.kind="Rounding")
+train_knn_2 <- train(Churn ~ ., data = training_set, 
+                     method = "knn", 
+                     tuneGrid = data.frame(k = seq(150, 310, 5)),
+                     trControl = control) #This is for k
+
+e5 <- as.numeric(max(train_knn_2$results['Accuracy']))
+
+print(paste("Optimal NN",train_knn_2$bestTune))
+
+print(paste("Accuracy KNN_crossvalidation",round(e5,4)))
+
+```
+
+```{r knn_cv_graph, include=TRUE, echo=FALSE, warning=FALSE}
+ggplot(train_knn_2, highlight = TRUE) +
+  ggtitle("KNN with Cross-Validation") + theme_economist() +
+  annotate(geom = "text",
+           x = as.numeric(train_knn_2$bestTune[1]),
+           y = as.numeric(max(train_knn_2$results['Accuracy']))*1.0003,
+           label = paste("Max Accuracy",round(as.numeric(max(train_knn_2$results['Accuracy'])),4))) +
+  theme(legend.position='top',
+        title  = 
+          element_text(size = 10,margin = margin(b = .5, unit = "cm")),
+        legend.margin = element_text(margin = margin(t = -1, unit = "cm")),
+        axis.text.x = 
+          element_text(size = 10, margin = margin(t = .25, unit = "cm")),
+        axis.title.x =  
+          element_text(size = 12, margin = margin(t = .5, unit = "cm")),
+        axis.title.y =  
+          element_text(size = 12, margin = margin(r = .25, unit = "cm")))
+
+```
+
+
+7.6. Classification Tree Model (ctm)
+```{r ctm, include=TRUE, echo=FALSE, warning=FALSE}
+
+set.seed(1)
+set.seed(1, sample.kind="Rounding")
+train_rpart <- train(Churn ~ ., method = "rpart",
+                     tuneGrid = data.frame(cp = seq(0, 0.05, 0.002)),
+                     data = training_set)
+
+e6 <- as.numeric(train_rpart$results$Accuracy[which.max(train_rpart$results$Accuracy)])
+
+print(paste("Optimal iteration",which.max(train_rpart$results$Accuracy)))
+print(paste("Optimal CP",train_rpart$results$cp[which.max(train_rpart$results$Accuracy)]))
+
+print(paste("Accuracy CTM",round(e6,4)))
+
+```
+```{r ctm_grahp_1, include=TRUE, echo=FALSE, warning=FALSE}
+ggplot(train_rpart) + theme_economist() +
+  annotate(geom = "text",
+           x = as.numeric(train_rpart$results$cp[which.max(train_rpart$results$Accuracy)]),
+           y = as.numeric(train_rpart$results$Accuracy[which.max(train_rpart$results$Accuracy)])*1.005,
+           label = paste("Max Acc",
+                         paste(round(train_rpart$results$Accuracy[which.max(train_rpart$results$Accuracy)],4),
+                               "CP =", as.numeric(train_rpart$results$cp[which.max(train_rpart$results$Accuracy)]))), size = 3) +
+  theme(legend.position='top',
+        title  = 
+          element_text(size = 10,margin = margin(b = .5, unit = "cm")),
+        legend.margin = element_text(margin = margin(t = -1, unit = "cm")),
+        axis.text.x = 
+          element_text(size = 10, margin = margin(t = .25, unit = "cm")),
+        axis.title.x =  
+          element_text(size = 12, margin = margin(t = .5, unit = "cm")),
+        axis.title.y =  
+          element_text(size = 12, margin = margin(r = .25, unit = "cm")))
+
+
+```
+
+```{r ctm_graph_2, include=TRUE, echo=FALSE, warning=FALSE}
+
+plot(train_rpart$finalModel, margin = .01)
+text(train_rpart$finalModel, 1 )
+
+```
+
+
+7.7. Random Forests (rf)
+```{r rf, include=TRUE, echo=FALSE, warning=FALSE}
+
+set.seed(1)
+set.seed(1, sample.kind="Rounding")
+train_rf <- train(Churn ~ ., method = "rf",
+                  tuneGrid = data.frame(mtry = seq(1:5)),
+                  data = training_set,
+                  ntree = 200)
+
+print("Variable Importance")
+varImp(train_rf)
+
+e7 <- as.numeric(train_rf$results$Accuracy[which.max(train_rf$results$Accuracy)])
+print(paste("Accuracy RF",round(e7,4)))
+
+```
+
+```{r rf_graph, include=TRUE, echo=FALSE, warning=FALSE}
+ggplot(train_rf) + ggtitle("random Forests") + theme_economist() +
+  annotate(geom = "text",
+           x = as.numeric(which.max(train_rf$results$Accuracy)[1]),
+           y = as.numeric(train_rf$results$Accuracy[which.max(train_rf$results$Accuracy)])*1.0007,
+           label = paste("Max Accuracy",round(train_rf$results$Accuracy[which.max(train_rf$results$Accuracy)],4))) +
+  theme(legend.position='top',
+        title  = 
+          element_text(size = 10,margin = margin(b = .5, unit = "cm")),
+        legend.margin = element_text(margin = margin(t = -1, unit = "cm")),
+        axis.text.x = 
+          element_text(size = 10, margin = margin(t = .25, unit = "cm")),
+        axis.title.x =  
+          element_text(size = 12, margin = margin(t = .5, unit = "cm")),
+        axis.title.y =  
+          element_text(size = 12, margin = margin(r = .25, unit = "cm")))
+
+```
+
+
+7.8. Naive Bayes (naive_bayes)
+```{r nb, include=TRUE, echo=FALSE, warning=FALSE}
+set.seed(1)
+set.seed(1, sample.kind="Rounding")
+train_nb <- train(Churn ~ ., method = "naive_bayes",
+                  data = training_set)
+
+e8 <- as.numeric(train_nb$results$Accuracy[which.max(train_nb$results$Accuracy)])
+print(paste("Accuracy NB",round(e8,4)))
+```
+
+7.9. Support Vector Machine (svmLinear)
+```{r svm, include=TRUE, echo=FALSE, warning=FALSE}
+set.seed(1)
+set.seed(1, sample.kind="Rounding")
+train_smv <- train(Churn ~ ., method = "svmLinear",
+                  data = training_set)
+e9 <- as.numeric(train_smv$results['Accuracy'])
+print(paste("Accuracy SVM",round(e9,4)))
+
+```
+
+7.10. Generalized Additive Models - Locally Estimated Scatterplot Smoothing (gamLoess)
+```{r loess, include=TRUE, echo=FALSE, warning=FALSE}
+set.seed(1)
+set.seed(1, sample.kind="Rounding")
+train_gamLoess <- train(Churn ~ DO + WorkingHours + AVGTicket + Cost, method = "gamLoess",
+                   data = training_set)
+e10 <- as.numeric(train_gamLoess$results['Accuracy'])
+print(paste("Accuracy gam_loess",round(e10,4)))
+```
+
+7. 11. Multinomial Logistic Regression (multinom)
+```{r multinom, include=TRUE, echo=FALSE, warning=FALSE}
+set.seed(1)
+set.seed(1, sample.kind="Rounding")
+train_multinom <- train(Churn ~ ., method = "multinom",
+                        data = training_set, trace = FALSE)
+e11 <- as.numeric(train_multinom$results$Accuracy[which.max(train_multinom$results$Accuracy)])
+print(paste("Accuracy multinom",round(e11,4)))
+```
+
+# 8. Models' summary
+Models have already been trained, so the next step is to chose the best performing ones in order to create an ensemble, and improve their individual predictive power:
+
+```{r models, include=TRUE, echo=FALSE, warning=FALSE}
+model_name <- c("lda","qda","glm", "knn_bootstrap", "knn_crosvalidation",
+            "ctm","rf","naive_bayes", "svmLinear",
+            "gamLoess", "multinom")
+
+models <- c("train_lda","train_qda","train_glm","train_knn","train_knn_2",
+            "train_rpart","train_rf","train_nb","train_smv",
+            "train_gamLoess","train_multinom")
+
+results <- c(e1,e2,e3,e4,e5,e6,e7,e8,e9,e10,e11)
+results <- as.data.frame(results)
+row.names(results) <- NULL
+selected_models <- cbind(model_name,models,results)
+selected_models <- as.data.frame(selected_models)
+row.names(selected_models) <- NULL
+selected_models
+```
+
+As accuracy of QDA is so low and configures an outlier, we will drop it to calculate the **mean accuracy**:
+
+```{r mean_models, include=TRUE, echo=FALSE, warning=FALSE}
+selected_models <- selected_models %>% filter(results > .75)
+mean_accuracy <- mean(selected_models$results)
+print(paste("The mean accuracy of the models is",round(mean_accuracy,4)))
+```
+
+Now there will only stay in the analysis those models giving results above the mean:
+```{r final_models, include=TRUE, echo=FALSE, warning=FALSE}
+selected_models <- selected_models %>% mutate(selected = 
+                                                ifelse(results > mean(results),"YES","NO"))
+
+final_models <- selected_models %>% filter(selected == "YES") %>%
+                   select(-selected) %>% rename(model = model_name, train_name = models)
+
+final_models
+```
+
+# 9. Accuracy on the test set
+9. 1. KNN bootstrap:
+```{r knn_boostrap_pred, include=TRUE, echo=FALSE, warning=FALSE}
+prediction_knn_bootstrap <- predict(train_knn, newdata = test_set)
+knn_bootstrap_acc_test <- as.numeric(confusionMatrix(data = prediction_knn_bootstrap, reference = test_set$Churn)$overall["Accuracy"][1])
+print(paste("Acc KNN Bootstrap on Test Set",round(knn_bootstrap_acc_test,4)))
+```
+
+9. 2. KNN cross-validation:
+```{r knn_cv_pred, include=TRUE, echo=FALSE, warning=FALSE}
+prediction_knn_cv <- predict(train_knn_2, newdata = test_set)
+knn_cv_acc_test <- as.numeric(confusionMatrix(data = prediction_knn_cv, reference = test_set$Churn)$overall["Accuracy"][1])
+print(paste("Acc KNN cross-validation on Test Set",round(knn_cv_acc_test,4)))
+```
+
+9. 3. Classification Tree Model (ctm)
+```{r ctm_pred, include=TRUE, echo=FALSE, warning=FALSE}
+prediction_ctm <- predict(train_rpart, newdata = test_set)
+#prediction_ctm <- as.data.frame(prediction_ctm)
+knn_ctm_acc_test <- as.numeric(mean(prediction_ctm == test_set$Churn))
+print(paste("Acc CTM on Test Set",round(knn_ctm_acc_test,4)))
+```
+
+9. 4. Random Forests:
+```{r rf_pred, include=TRUE, echo=FALSE, warning=FALSE}
+prediction_rf <- predict(train_rf, newdata = test_set)
+#prediction_rf <- as.data.frame(prediction_rf)
+knn_rf_acc_test <- as.numeric(confusionMatrix(data = prediction_rf, reference = test_set$Churn)$overall["Accuracy"][1])
+print(paste("Acc CTM on Test Set",round(knn_rf_acc_test,4)))
+```
+
+9. 5. Gam-Loess:
+```{r gloess_pred, include=TRUE, echo=FALSE, warning=FALSE}
+prediction_gl <- predict(train_gamLoess, newdata = test_set)
+#prediction_gl <- as.data.frame(prediction_gl)
+knn_gl_acc_test <- as.numeric(confusionMatrix(data = prediction_gl, reference = test_set$Churn)$overall["Accuracy"][1])
+print(paste("Acc Gam-Loess on Test Set",round(knn_gl_acc_test,4)))
+```
+
+Accuracy of models is finally gathered in the following table:
+```{r accuracy_table,  include=TRUE, echo=FALSE, warning=FALSE}
+Accuracy_Test_Set <- c(knn_bootstrap_acc_test,knn_cv_acc_test,
+                      knn_ctm_acc_test,knn_rf_acc_test,knn_gl_acc_test)
+
+final_table <- cbind(final_models,Accuracy_Test_Set) 
+final_table <- as.data.frame(final_table)
+final_table <- final_table %>% rename(Accuracy_Train_Set = results)
+final_table
+```
+
+# 10. Final Predictions:
+Once best models are selected over the others, the next step is to get a classification solution that takes them all into account, voting for each case.
+
+The first ten rows of this experiment, look like this:
+```{r models_combination,  include=TRUE, echo=FALSE, warning=FALSE}
+prediction_knn_bootstrap <- as.data.frame(prediction_knn_bootstrap)
+prediction_knn_cv <- as.data.frame(prediction_knn_cv)
+prediction_ctm <- as.data.frame(prediction_ctm)
+prediction_rf <- as.data.frame(prediction_rf)
+prediction_gl <- as.data.frame(prediction_gl)
+
+ensemble_predictions <- cbind(prediction_knn_bootstrap,prediction_knn_cv,
+                              prediction_ctm,prediction_rf,prediction_gl)
+
+ensemble_predictions <- ensemble_predictions %>% mutate(
+                        prediction_knn_bootstrap = ifelse(prediction_knn_bootstrap == "NO",0,1),
+                        prediction_knn_cv = ifelse(prediction_knn_cv == "NO",0,1),
+                        prediction_ctm = ifelse(prediction_ctm == "NO",0,1),
+                        prediction_rf = ifelse(prediction_rf == "NO",0,1),
+                        prediction_gl = ifelse(prediction_gl == "NO",0,1),
+)
+
+
+ensemble_predictions <- ensemble_predictions %>% mutate(
+                        Final_Decision = ifelse(prediction_knn_bootstrap+prediction_knn_cv+
+                          prediction_ctm+prediction_rf+prediction_gl >= 3,"YES","NO"))
+
+head(ensemble_predictions,10)
+
+```
+
+The final accuracy is:
+```{r ensemble_results,  include=TRUE, echo=FALSE, warning=FALSE}
+
+print(paste("Accuracy of Ensemble",round(mean(ensemble_predictions$Final_Decision == test_set$Churn),4)))
+
+```
+
+And the **confusion matrix** looks like this:
+```{r conf_mat,  include=TRUE, echo=FALSE, warning=FALSE}
+confusionMatrix(as.factor(ensemble_predictions$Final_Decision), reference = test_set$Churn)
+
+```
+
+```{r conf_mat_graph,  include=TRUE, echo=FALSE, warning=FALSE}
+TClass <- factor(c("NO","YES","YES","NO"))
+PClass <- factor(c("NO","NO","YES","YES"))
+Y      <- c(confusionMatrix(as.factor(ensemble_predictions$Final_Decision), reference = test_set$Churn)$table[1],
+            confusionMatrix(as.factor(ensemble_predictions$Final_Decision), reference = test_set$Churn)$table[3],
+            confusionMatrix(as.factor(ensemble_predictions$Final_Decision), reference = test_set$Churn)$table[4],
+            confusionMatrix(as.factor(ensemble_predictions$Final_Decision), reference = test_set$Churn)$table[2])
+df <- data.frame(TClass, PClass, Y)
+
+ggplot(data =  df, mapping = aes(x = TClass, y = PClass)) + 
+  ggtitle("Confusion Matrix for Balanced Dataset") + 
+  xlab("Actual Class - Churn")  +
+  ylab("Predicted Class - Churn")  +
+  geom_tile(aes(fill = Y), colour = "white") +
+  geom_text(aes(label = sprintf("%1.0f", Y)), vjust = 1) +
+  scale_fill_gradient(low = "blue", high = "red") +
+  theme_bw() + theme(legend.position = "none")
+```
+
+
+Being **NO** the positive class, the final results show a great predicting power of **SENSITIVITY**, that means that no churners will be indeed detected.
+
+On the other hand results on **SPECIFICITY** are quite bad, meaning that a significant proportion churners are not actually being detected (False Positive - Type I Error).
+
+As seen in the Variable Importance of Random Forests, income is the most important variable to determine Churn, so a bonus could be a great incentive to motivate those who are potential churners to keep driving with the APP.
+
+With these considerations, we conclude that this model is good in a mature operation in which *making bonus budget efficient* is a top priority, but in an initial step of the business retaining drivers may be critical.
+
+# 11. Comments and alternatives.
+One interesting change in the study, is to balance datasets in order to train models with equal proportions of churners and not churners.
+
+```{r dataset_2,  include=TRUE, echo=FALSE, warning=FALSE}
+id_2 <- "1bfPvLbhAd3Pp_69UTXhDu0tbN9L-IFLE" # google file ID
+dc_3 <- read.csv(sprintf("https://docs.google.com/uc?id=%s&export=download", id_2))
+dc_3  <- dc_3  %>% select(-ID)
+
+dc_3  %>% group_by(Churn) %>% summarize(Drivers = n()) %>%
+  ggplot(aes(Churn,Drivers, label = Drivers, vjust=-.5)) +
+  geom_bar(stat="identity",position="dodge") +
+  ggtitle("Quantity of drivers churning") + theme_economist() +
+  xlab("Churn")  +
+  ylab("Drivers")  +
+  geom_text_repel() +
+  theme(legend.position='top',
+        title  = 
+          element_text(size = 10,margin = margin(b = .5, unit = "cm")),
+        legend.margin = element_text(margin = margin(t = -1, unit = "cm")),
+        axis.text.x = 
+          element_text(size = 10, margin = margin(t = .25, unit = "cm")),
+        axis.title.x =  
+          element_text(size = 12, margin = margin(t = .5, unit = "cm")),
+        axis.title.y =  
+          element_text(size = 12, margin = margin(r = .25, unit = "cm")))
+
+
+dc_3  %>% group_by(Churn) %>% summarize(Drivers = n()) %>% mutate(Prop = Drivers/sum(Drivers))
+
+```
+
+Now there is no prevalence in datasets, 50% for each churn and no churn classes.
+
+```{r models_2,  include=TRUE, echo=FALSE, warning=FALSE}
+#Create Data Partition
+dc_3 <- dc_3 %>% mutate(Churn = as.factor(Churn))
+
+set.seed(1, sample.kind="Rounding") # if using R 3.5 or earlier, use `set.seed(1)`
+set.seed(1)
+test_index_2 <- createDataPartition(dc_3$Churn, times = 1, p = 0.1, list = FALSE)
+training_set_2 <- dc_3[-test_index_2,]
+test_set_2 <- dc_3[test_index_2,]
+
+#Models
+#1. LDA
+set.seed(1)
+set.seed(1, sample.kind="Rounding")
+train_lda_2 <- train(Churn ~ ., data = training_set_2, method = "lda")
+f1 <- as.numeric(train_lda_2$results['Accuracy'][1])
+print(paste("Accuracy lda",round(f1,4)))
+
+#2. QDA
+set.seed(1)
+set.seed(1, sample.kind="Rounding")
+train_qda_2 <- train(Churn ~ DO + WorkingHours + AVGTicket + Cost,
+                  data = training_set_2, method = "qda")
+f2 <- as.numeric(train_qda_2$results['Accuracy'][1])
+print(paste("Accuracy qda",round(f2,4)))
+
+#3. Logistic Regression
+set.seed(1)
+set.seed(1, sample.kind="Rounding")
+train_glm_2 <- train(Churn ~ ., data = training_set_2, method = "glm")
+f3 <- as.numeric(train_glm_2$results['Accuracy'][1])
+print(paste("Accuracy glm",round(f3,4)))
+
+#4. KNN --> Default bootstrap
+set.seed(1)
+set.seed(1, sample.kind="Rounding")
+train_knn_3 <- train(Churn ~ ., data = training_set_2, 
+                   method = "knn", 
+                   tuneGrid = data.frame(k = seq(180, 310, 5))) #This is for k
+f4 <- as.numeric(max(train_knn_3$results['Accuracy']))
+print(paste("Accuracy knn_bootstrap",round(f4,4)))
+
+#5. KNN --> Cross Validation
+control <- trainControl(method = "cv", number = 10, p = .9)
+set.seed(1)
+set.seed(1, sample.kind="Rounding")
+train_knn_2_3 <- train(Churn ~ ., data = training_set_2, 
+                     method = "knn", 
+                     tuneGrid = data.frame(k = seq(180, 310, 5)),
+                     trControl = control) #This is for k
+f5 <- as.numeric(max(train_knn_2_3$results['Accuracy']))
+print(paste("Accuracy knn_cv",round(f5,4)))
+
+#6. Classification tree model (CTM)
+set.seed(1)
+set.seed(1, sample.kind="Rounding")
+train_rpart_2 <- train(Churn ~ ., method = "rpart",
+                     tuneGrid = data.frame(cp = seq(0, 0.05, 0.002)),
+                     data = training_set_2)
+f6 <- as.numeric(train_rpart_2$results$Accuracy[which.max(train_rpart_2$results$Accuracy)])
+print(paste("Accuracy ctm",round(f6,4)))
+
+#7. Random Forest
+set.seed(1)
+set.seed(1, sample.kind="Rounding")
+train_rf_2 <- train(Churn ~ ., method = "rf",
+                  tuneGrid = data.frame(mtry = seq(1:5)),
+                  data = training_set_2,
+                  ntree = 200)
+f7 <- as.numeric(train_rf_2$results$Accuracy[which.max(train_rf_2$results$Accuracy)])
+print(paste("Accuracy rf",round(f7,4)))
+
+#8. Naive Bayes
+set.seed(1)
+set.seed(1, sample.kind="Rounding")
+train_nb_2 <- train(Churn ~ ., method = "naive_bayes",
+                  data = training_set_2)
+f8 <- as.numeric(train_nb_2$results$Accuracy[which.max(train_nb_2$results$Accuracy)])
+print(paste("Accuracy nb",round(f8,4)))
+
+#9. svmLinear
+set.seed(1)
+set.seed(1, sample.kind="Rounding")
+train_smv_2 <- train(Churn ~ ., method = "svmLinear",
+                  data = training_set_2)
+f9 <- as.numeric(train_smv_2$results['Accuracy'])
+print(paste("Accuracy svm",round(f9,4)))
+
+#10. gamLoess
+set.seed(1)
+set.seed(1, sample.kind="Rounding")
+train_gamLoess_2 <- train(Churn ~ DO + WorkingHours + AVGTicket + Cost, method = "gamLoess",
+                   data = training_set_2)
+f10 <- as.numeric(train_gamLoess_2$results['Accuracy'])
+print(paste("Accuracy gam_loess",round(f10,4)))
+
+#11. multinom
+set.seed(1)
+set.seed(1, sample.kind="Rounding")
+train_multinom_2 <- train(Churn ~ ., method = "multinom",
+                        data = training_set_2, trace = FALSE)
+f11 <- as.numeric(train_multinom_2$results$Accuracy[which.max(train_multinom_2$results$Accuracy)])
+print(paste("Accuracy multinom",round(f11,4)))
+```
+
+The results of the models in terms of **Accuracy** can be compiled as follows:
+```{r models_results_2,  include=TRUE, echo=FALSE, warning=FALSE}
+model_name_2 <- c("lda","qda","glm", "knn_bootstrap", "knn_crosvalidation",
+            "ctm","rf","naive_bayes", "svmLinear",
+            "gamLoess", "multinom")
+models_2 <- c("train_lda","train_qda","train_glm","train_knn","train_knn_2",
+            "train_rpart","train_rf","train_nb","train_smv",
+            "train_gamLoess","train_multinom")
+results_2 <- c(f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11)
+results_2 <- as.data.frame(results_2)
+row.names(results_2) <- NULL
+selected_models_2 <- cbind(model_name_2,models_2,results_2)
+selected_models_2 <- as.data.frame(selected_models_2)
+row.names(selected_models_2) <- NULL
+selected_models_2
+```
+
+As done before, the best models will be selected as the ones above the mean but excluding the outlier of *qda*:
+```{r model_selection_2,  include=TRUE, echo=FALSE, warning=FALSE}
+selected_models_2 <- selected_models_2 %>% filter(results_2 > .75)
+mean_accuracy_2 <- mean(selected_models_2$results_2)
+print(paste("The mean accuracy of the models is",round(mean_accuracy_2,4)))
+```
+
+The final models are the ones shown below:
+```{r final_models_2, include=TRUE, echo=FALSE, warning=FALSE}
+selected_models_2 <- selected_models_2 %>% mutate(selected = 
+                                                ifelse(results_2 > mean(results_2),"YES","NO"))
+
+final_models_2 <- selected_models_2 %>% filter(selected == "YES") %>%
+                   select(-selected) %>% rename(model = model_name_2, train_name = models_2)
+final_models_2
+```
+
+Now it is time to measure **Accuracy ** in the Test Set:
+```{r predictions_2, include=TRUE, echo=FALSE, warning=FALSE}
+#I.a. GLM:
+prediction_glm_2 <- predict(train_glm_2, newdata = test_set_2)
+glm_acc_test_2 <- as.numeric(confusionMatrix(data = prediction_glm_2, reference = test_set_2$Churn)$overall["Accuracy"][1])
+
+#I.b. CTM:
+prediction_ctm_2 <- predict(train_rpart_2, newdata = test_set_2)
+ctm_acc_test_2 <- as.numeric(mean(prediction_ctm_2 == test_set_2$Churn))
+
+#I.c. RF:
+prediction_rf_2 <- predict(train_rf_2, newdata = test_set_2)
+rf_acc_test_2 <- as.numeric(confusionMatrix(data = prediction_rf_2, reference = test_set_2$Churn)$overall["Accuracy"][1])
+
+#I.d. Multinom:
+prediction_multinom_2 <- predict(train_multinom_2, newdata = test_set_2)
+multinom_acc_test_2 <- as.numeric(confusionMatrix(data = prediction_multinom_2, reference = test_set_2$Churn)$overall["Accuracy"][1])
+
+prediction_glm_2 <- as.data.frame(prediction_glm_2)
+prediction_ctm_2 <- as.data.frame(prediction_ctm_2)
+prediction_rf_2 <- as.data.frame(prediction_rf_2)
+prediction_multinom_2 <- as.data.frame(prediction_multinom_2)
+
+Accuracy_Test_Set_2 <- c(glm_acc_test_2,ctm_acc_test_2,
+                       rf_acc_test_2,multinom_acc_test_2)
+
+final_table_2 <- cbind(final_models_2,Accuracy_Test_Set_2) 
+final_table_2 <- as.data.frame(final_table_2)
+final_table_2 <- final_table_2 %>% rename(Accuracy_Train_Set_2 = results_2)
+
+final_table_2
+```
+Accuracy in both training and test sets is similar, demonstrating there was no overtraining.
+
+The ensemble is formed againt with the new best models:
+```{r ensemble_results_2,  include=TRUE, echo=FALSE, warning=FALSE}
+ensemble_predictions_2 <- cbind(prediction_glm_2,prediction_ctm_2,
+                              prediction_rf_2,prediction_multinom_2)
+
+ensemble_predictions_2 <- ensemble_predictions_2 %>% mutate(
+                        prediction_glm_2 = ifelse(prediction_glm_2 == "NO",0,1),
+                        prediction_ctm_2 = ifelse(prediction_ctm_2 == "NO",0,1),
+                        prediction_rf_2 = ifelse(prediction_rf_2 == "NO",0,1),
+                        prediction_multinom_2 = ifelse(prediction_multinom_2 == "NO",0,1),
+)
+
+ensemble_predictions_2 <- ensemble_predictions_2 %>% mutate(
+                        Final_Decision = ifelse(prediction_glm_2+
+                                                  prediction_ctm_2+
+                        prediction_rf_2+prediction_multinom_2 >= 3,"YES","NO"))
+
+print(paste("Accuracy of Ensemble",round(mean(ensemble_predictions_2$Final_Decision == test_set_2$Churn),4)))
+
+```
+
+And the **confusion matrix** looks like this:
+```{r conf_mat_2,  include=TRUE, echo=FALSE, warning=FALSE}
+confusionMatrix(as.factor(ensemble_predictions_2$Final_Decision), reference = test_set_2$Churn)
+```
+
+```{r conf_mat_graph_2,  include=TRUE, echo=FALSE, warning=FALSE}
+TClass_2 <- factor(c("NO","YES","YES","NO"))
+PClass_2 <- factor(c("NO","NO","YES","YES"))
+Y_2      <- c(confusionMatrix(as.factor(ensemble_predictions_2$Final_Decision), reference = test_set_2$Churn)$table[1],
+            confusionMatrix(as.factor(ensemble_predictions_2$Final_Decision), reference = test_set_2$Churn)$table[3],
+            confusionMatrix(as.factor(ensemble_predictions_2$Final_Decision), reference = test_set_2$Churn)$table[4],
+            confusionMatrix(as.factor(ensemble_predictions_2$Final_Decision), reference = test_set_2$Churn)$table[2])
+df_2 <- data.frame(TClass_2, PClass_2, Y_2)
+
+ggplot(data =  df_2, mapping = aes(x = TClass_2, y = PClass_2)) + 
+  ggtitle("Confusion Matrix for Balanced Dataset") + 
+  xlab("Actual Class - Churn")  +
+  ylab("Predicted Class - Churn")  +
+  geom_tile(aes(fill = Y), colour = "white") +
+  geom_text(aes(label = sprintf("%1.0f", Y)), vjust = 1) +
+  scale_fill_gradient(low = "blue", high = "red") +
+  theme_bw() + theme(legend.position = "none")
+```
+
+Being **NO** the positive class, the results show a lesser accuracy, losing predicting power on **SENSITIVITY**, that means being less capable of detecting actual no churners.
+
+But as a great win, **SPECIFICITY** rises and more actual churners are detected and with a more aggressive *bonus budget allocation* retention can improve significantly, even if given bonuses to not churners.
+
+The model to put in practice in real life will depend on the maturity of the business and other variables related to competition that are beyond this publication.
